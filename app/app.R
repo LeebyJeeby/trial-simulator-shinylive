@@ -1,5 +1,4 @@
 library(shiny)
-library(lme4)
 library(dplyr)
 library(ggplot2)
 library(bslib)
@@ -14,26 +13,24 @@ library(purrr)
 #    - Individual (Within-Year/School)
 # 3. Data generation uses hierarchical sampling with user-defined RANGES for 
 #    Year Groups and Class Sizes.
-# 4. The Mixed Model (MLM) adapts its random effects structure to the design 
-#    (e.g., nesting years within schools).
+# 4. NOTE: Estimators restricted to OLS only for Shinylive compatibility 
+#    (removed lme4/Matrix dependencies).
 # ------------------------------------
 
 # --- THE SIMULATION ENGINE ---
 run_sim <- function(n_schools, 
-                    years_range,    # Vector c(min, max)
-                    classes_range,  # Vector c(min, max)
-                    class_size_range, # Vector c(min, max)
+                    years_range,    
+                    classes_range,  
+                    class_size_range, 
                     attrition_sch, 
                     attrition_pup, 
                     effect_size, 
-                    icc_school,     # Variance attributable to School
-                    icc_year,       # Variance attributable to Year w/in School
+                    icc_school,     
+                    icc_year,       
                     estimators, 
                     design_type) {
   
   # --- 1. Variance Components ---
-  # Total Variance = 1. We partition it into School, Year, and Residual (Pupil).
-  # If ICC_School + ICC_Year > 1, we normalize (sanity check).
   total_cluster_var <- icc_school + icc_year
   if (total_cluster_var >= 1) {
     stop("Error: Combined ICC (School + Year) must be less than 1.")
@@ -59,7 +56,6 @@ run_sim <- function(n_schools,
   }
   
   # B. Generate Year Groups within Schools
-  # Function to sample count from range
   get_n <- function(range) { 
     if(range[1] == range[2]) return(range[1])
     sample(range[1]:range[2], 1) 
@@ -76,15 +72,11 @@ run_sim <- function(n_schools,
     
     # Create Year Groups
     for(y in 1:n_years) {
-      y_id <- paste0(s_id, "_", y) # Unique Year ID
+      y_id <- paste0(s_id, "_", y) 
       u_year <- rnorm(1, 0, sd_year)
       
       # Assign Treatment: Year Group Design
-      # Randomize years 50/50 within the school
       if(design_type == "Year Group") {
-        # Note: If n_years is odd, randomization is slightly unbalanced per school
-        # This is realistic. We use simple coin flip probability 0.5 for independent assignment
-        # OR exact blocking if we want forced balance. Let's use simple random for years.
         treat_val <- rbinom(1, 1, 0.5) 
       } else if (design_type == "Whole School") {
         treat_val <- s_tr
@@ -98,7 +90,6 @@ run_sim <- function(n_schools,
       for(c in 1:n_classes) {
         n_pups <- get_n(class_size_range)
         
-        # Build Pupil Data Chunk
         # Treatment: Individual Design
         if(design_type == "Individual") {
           t_vec <- sample(rep(c(0,1), length.out = n_pups))
@@ -111,7 +102,7 @@ run_sim <- function(n_schools,
           year_id = y_id,
           class_id = paste0(y_id, "_", c),
           treat = t_vec,
-          # Sim Outcome: Intercept + Treatment + School_RE + Year_RE + Residual
+          # Sim Outcome includes random effects regardless of estimator
           score = (effect_size * t_vec) + s_u + u_year + rnorm(n_pups, 0, sd_resid)
         )
         data_list[[length(data_list) + 1]] <- chunk
@@ -146,46 +137,13 @@ run_sim <- function(n_schools,
     return(NULL)
   }
   
-  # OLS
+  # OLS (Always available)
   if ("OLS" %in% estimators) {
     fit <- lm(score ~ treat, data = data)
     results[[length(results)+1]] <- get_res(fit, "OLS")
   }
   
-  # MLM (Mixed Model)
-  if ("MLM" %in% estimators) {
-    # Adjust formula based on design complexity
-    if (design_type == "Whole School") {
-      # Nesting: Pupils in Schools
-      f <- score ~ treat + (1|school_id)
-    } else {
-      # Nesting: Pupils in Years in Schools
-      # For Year Group or Individual randomization, we must account for Year variance
-      f <- score ~ treat + (1|school_id/year_id)
-    }
-    
-    try({
-      fit <- suppressMessages(lmer(f, data = data))
-      results[[length(results)+1]] <- get_res(fit, "MLM")
-    }, silent = TRUE)
-  }
-  
-  # CRE (Correlated Random Effects)
-  if ("CRE" %in% estimators) {
-    # We calculate mean treatment at the highest clustering level relevant to design
-    if (design_type == "Year Group") {
-       data <- data %>% group_by(school_id, year_id) %>% mutate(m_treat = mean(treat)) %>% ungroup()
-       f <- score ~ treat + m_treat + (1|school_id/year_id)
-    } else {
-       data <- data %>% group_by(school_id) %>% mutate(m_treat = mean(treat)) %>% ungroup()
-       f <- score ~ treat + m_treat + (1|school_id)
-    }
-    
-    try({
-      fit <- suppressMessages(lmer(f, data = data))
-      results[[length(results)+1]] <- get_res(fit, "CRE")
-    }, silent = TRUE)
-  }
+  # MLM and CRE removed to reduce dependencies for Shinylive
   
   return(bind_rows(results))
 }
@@ -193,18 +151,16 @@ run_sim <- function(n_schools,
 # --- THE UI ---
 ui <- page_sidebar(
   theme = bs_theme(bootswatch = "cosmo"),
-  title = "Advanced Trial Simulator (3-Level)",
+  title = "Advanced Trial Simulator (OLS Only)",
   
   sidebar = sidebar(
     title = "Design Parameters",
     
-    # 1. Design Choice
     selectInput("design", "Randomization Level", 
                 choices = c("Whole School", "Year Group", "Individual")),
     
-    # 2. Structural Sliders (Ranges)
     accordion(
-      open = FALSE, # Collapsed by default to save space
+      open = FALSE, 
       accordion_panel("Structure & Size",
         numericInput("n_schools", "Number of Schools", 30, min = 10, max = 200),
         sliderInput("years_range", "Year Groups per School (Range)", 
@@ -226,10 +182,12 @@ ui <- page_sidebar(
       )
     ),
     
-    # 3. Estimation Settings
+    # Checkbox disabled/restricted to OLS
     checkboxGroupInput("ests", "Estimators", 
-                       choices = c("OLS", "MLM", "CRE"), 
-                       selected = c("OLS", "MLM")),
+                       choices = c("OLS"), 
+                       selected = c("OLS")),
+    helpText("MLM/CRE disabled for browser compatibility."),
+    
     numericInput("reps", "Simulations", 30, min = 10, max = 200),
     actionButton("go", "Run Simulation", class = "btn-primary w-100")
   ),
@@ -251,13 +209,12 @@ server <- function(input, output) {
   results <- eventReactive(input$go, {
     req(input$reps > 0)
     
-    # Validation: Check ICC sum
     if((input$icc_sch + input$icc_yr) >= 1) {
       showNotification("Error: Total ICC (School + Year) must be < 1", type = "error")
       return(NULL)
     }
     
-    withProgress(message = 'Simulating Nested Data...', value = 0, {
+    withProgress(message = 'Simulating (OLS only)...', value = 0, {
       map_dfr(1:input$reps, function(i) {
         incProgress(1/input$reps)
         
