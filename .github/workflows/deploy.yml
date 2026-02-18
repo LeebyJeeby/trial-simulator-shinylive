@@ -16,13 +16,22 @@ jobs:
         with:
           use-public-rspm: true
 
-        run: |
-          install.packages(c("shiny", "shinylive", "lme4", "bslib", "tidyverse", "tidyr", "purrr", "httpuv"))
-        shell: Rscript {0}
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::shiny
+            any::shinylive
+            any::lme4
+            any::bslib
+            any::tidyverse
+            any::tidyr
+            any::purrr
+            any::httpuv
 
       - name: Build Shinylive App
         run: |
-          Rscript -e 'shinylive::export(appdir = ".", destdir = "docs")'
+          # Create docs folder if not exists (shinylive does it but just in case)
+          Rscript -e 'shinylive::export(appdir = "app", destdir = "docs")'
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
