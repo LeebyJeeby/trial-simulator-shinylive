@@ -23,10 +23,13 @@ jobs:
             any::shinylive
             any::lme4
             any::bslib
-            any::tidyverse
+            any::dplyr
+            any::ggplot2
             any::tidyr
             any::purrr
             any::httpuv
+            any::Matrix
+            any::Rcpp
 
       - name: Build Shinylive App
         run: |
